@@ -8,6 +8,8 @@ from django.utils.translation import ugettext_lazy as _
 from tagging import settings
 from tagging.models import Tag
 from tagging.utils import edit_string_for_tags
+from tagging.models import parents
+from django.db.models import loading
 
 class TagField(CharField):
     """
@@ -22,12 +24,14 @@ class TagField(CharField):
 
     def contribute_to_class(self, cls, name):
         super(TagField, self).contribute_to_class(cls, name)
-
+        
         # Make this object the descriptor for field access.
+        
         setattr(cls, self.name, self)
-
-        # Save tags back to the database post-save
-        signals.post_save.connect(self._save, cls, True)
+        
+        self.cls = cls
+        
+        signals.post_save.connect(self._save)
 
     def __get__(self, instance, owner=None):
         """
@@ -48,6 +52,7 @@ class TagField(CharField):
            'tag1 tag2 tag3 tag4'
 
         """
+        
         # Handle access on the model (i.e. Link.tags)
         if instance is None:
             return edit_string_for_tags(Tag.objects.usage_for_model(owner))
@@ -75,9 +80,10 @@ class TagField(CharField):
         """
         Save tags back to the database
         """
-        tags = self._get_instance_tag_cache(kwargs['instance'])
-        if tags is not None:
-            Tag.objects.update_tags(kwargs['instance'], tags)
+        if [m for m in parents(kwargs['sender']) if m == self.cls] or kwargs['sender'] == self.cls:
+            tags = self._get_instance_tag_cache(kwargs['instance'])
+            if tags is not None:
+                Tag.objects.update_tags(kwargs['instance'], tags)
 
     def __delete__(self, instance):
         """

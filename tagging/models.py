@@ -19,6 +19,74 @@ from tagging.utils import LOGARITHMIC
 
 qn = connection.ops.quote_name
 
+import tagging
+
+from django.db.models.fields.related import OneToOneField
+
+qn = connection.ops.quote_name
+
+import types
+def parents( c, seen=None ):
+    """Python class base-finder"""
+    if seen is None:
+        seen = {}
+    seen[c] = None
+    items = [c]
+    for base in c.__bases__:
+        if not seen.has_key(base):
+            items.extend( parents(base, seen))
+    return items
+
+def model_from_obj(obj):
+    try:
+        obj.__bases__
+    except AttributeError:
+        obj = obj.__class__
+    return obj
+
+def models_leading_to(model, include_self=True, reverse=False):
+    parent_models = model._meta.get_parent_list()
+    parent_models = list(parent_models)
+    if include_self:
+        parent_models.append(model)
+    if reverse:
+        parent_models.reverse()
+    return parent_models
+
+def reversed_o2o_attrs_with_model(model):
+    attrs_and_models = []
+    seen_models = []
+    for mdl in models_leading_to(model, include_self=False, reverse=True):
+        attrs_and_models.append((mdl.__name__.lower() + '_ptr', mdl))
+    return attrs_and_models
+
+def get_all_parents_until_registered(obj):
+    mod = model_from_obj(obj)
+    reg = get_registered_model(mod)
+    objs = [obj]
+    for attr, model in reversed_o2o_attrs_with_model(mod):
+        obj = getattr(obj, attr)
+        objs.append(obj)
+    return objs
+
+def get_registered_model(obj):
+    if obj not in tagging.registry:
+        objs = [m for m in parents(obj) if hasattr(m, '_meta') and m in tagging.registry]
+        if objs:
+            obj = objs[0]
+    return obj
+
+def ctypes_leading_to(obj):
+    obj = model_from_obj(obj)
+    ctypes = []
+    for model in models_leading_to(obj):
+        ctypes.append(ContentType.objects.get_for_model(model))
+    return ctypes
+
+def get_registered_ctype(obj):
+    obj = model_from_obj(obj)
+    return ContentType.objects.get_for_model(get_registered_model(obj))
+
 ############
 # Managers #
 ############
@@ -28,9 +96,10 @@ class TagManager(models.Manager):
         """
         Update tags associated with an object.
         """
-        ctype = ContentType.objects.get_for_model(obj)
-        current_tags = list(self.filter(items__content_type__pk=ctype.pk,
-                                        items__object_id=obj.pk))
+        ctypes = ctypes_leading_to(obj)
+        current_tags = list(self.filter(items__content_type__pk__in=[ctype.pk for ctype in ctypes],
+                                          items__object_id=obj.pk))
+
         updated_tag_names = parse_tag_input(tag_names)
         if settings.FORCE_LOWERCASE_TAGS:
             updated_tag_names = [t.lower() for t in updated_tag_names]
@@ -39,15 +108,16 @@ class TagManager(models.Manager):
         tags_for_removal = [tag for tag in current_tags \
                             if tag.name not in updated_tag_names]
         if len(tags_for_removal):
-            TaggedItem._default_manager.filter(content_type__pk=ctype.pk,
+            TaggedItem._default_manager.filter(content_type__pk__in=[ctype.pk for ctype in ctypes],
                                                object_id=obj.pk,
                                                tag__in=tags_for_removal).delete()
         # Add new tags
         current_tag_names = [tag.name for tag in current_tags]
-        for tag_name in updated_tag_names:
-            if tag_name not in current_tag_names:
-                tag, created = self.get_or_create(name=tag_name)
-                TaggedItem._default_manager.create(tag=tag, object=obj)
+        for robj in get_all_parents_until_registered(obj):
+            for tag_name in updated_tag_names:
+                if tag_name not in current_tag_names:
+                    tag, created = self.get_or_create(name=tag_name)
+                    TaggedItem._default_manager.create(tag=tag, object=robj)
 
     def add_tag(self, obj, tag_name):
         """
@@ -62,7 +132,7 @@ class TagManager(models.Manager):
         if settings.FORCE_LOWERCASE_TAGS:
             tag_name = tag_name.lower()
         tag, created = self.get_or_create(name=tag_name)
-        ctype = ContentType.objects.get_for_model(obj)
+        ctype = get_registered_ctype(obj)
         TaggedItem._default_manager.get_or_create(
             tag=tag, content_type=ctype, object_id=obj.pk)
 
@@ -71,7 +141,7 @@ class TagManager(models.Manager):
         Create a queryset matching all tags associated with the given
         object.
         """
-        ctype = ContentType.objects.get_for_model(obj)
+        ctype = get_registered_ctype(obj)
         return self.filter(items__content_type__pk=ctype.pk,
                            items__object_id=obj.pk)
 
@@ -103,7 +173,7 @@ class TagManager(models.Manager):
             'tagged_item': qn(TaggedItem._meta.db_table),
             'model': model_table,
             'model_pk': model_pk,
-            'content_type_id': ContentType.objects.get_for_model(model).pk,
+            'content_type_id': get_registered_ctype(model).pk,
         }
 
         min_count_sql = ''
@@ -208,7 +278,7 @@ class TagManager(models.Manager):
             'tag': qn(self.model._meta.db_table),
             'count_sql': counts and ', COUNT(%s.object_id)' % tagged_item_table or '',
             'tagged_item': tagged_item_table,
-            'content_type_id': ContentType.objects.get_for_model(model).pk,
+            'content_type_id': get_registered_ctype(model).pk,
             'tag_id_placeholders': ','.join(['%s'] * tag_count),
             'tag_count': tag_count,
             'min_count_sql': min_count is not None and ('HAVING COUNT(%s.object_id) >= %%s' % tagged_item_table) or '',
@@ -270,6 +340,7 @@ class TaggedItemManager(models.Manager):
           Now that the queryset-refactor branch is in the trunk, this can be
           tidied up significantly.
     """
+    
     def get_by_model(self, queryset_or_model, tags):
         """
         Create a ``QuerySet`` containing instances of the specified
@@ -289,7 +360,7 @@ class TaggedItemManager(models.Manager):
             return self.get_intersection_by_model(queryset_or_model, tags)
 
         queryset, model = get_queryset_and_model(queryset_or_model)
-        content_type = ContentType.objects.get_for_model(model)
+        content_type = get_registered_ctype(model)
         opts = self.model._meta
         tagged_item_table = qn(opts.db_table)
         return queryset.extra(
@@ -330,7 +401,7 @@ class TaggedItemManager(models.Manager):
             'model_pk': '%s.%s' % (model_table, qn(model._meta.pk.column)),
             'model': model_table,
             'tagged_item': qn(self.model._meta.db_table),
-            'content_type_id': ContentType.objects.get_for_model(model).pk,
+            'content_type_id': get_registered_ctype(model).pk,
             'tag_id_placeholders': ','.join(['%s'] * tag_count),
             'tag_count': tag_count,
         }
@@ -368,7 +439,7 @@ class TaggedItemManager(models.Manager):
             'model_pk': '%s.%s' % (model_table, qn(model._meta.pk.column)),
             'model': model_table,
             'tagged_item': qn(self.model._meta.db_table),
-            'content_type_id': ContentType.objects.get_for_model(model).pk,
+            'content_type_id': get_registered_ctype(model).pk,
             'tag_id_placeholders': ','.join(['%s'] * tag_count),
         }
 
@@ -391,8 +462,8 @@ class TaggedItemManager(models.Manager):
         """
         queryset, model = get_queryset_and_model(queryset_or_model)
         model_table = qn(model._meta.db_table)
-        content_type = ContentType.objects.get_for_model(obj)
-        related_content_type = ContentType.objects.get_for_model(model)
+        content_type = get_registered_ctype(obj)
+        related_content_type = get_registered_ctype(model)
         query = """
         SELECT %(model_pk)s, COUNT(related_tagged_item.object_id) AS %(count)s
         FROM %(model)s, %(tagged_item)s, %(tag)s, %(tagged_item)s related_tagged_item
