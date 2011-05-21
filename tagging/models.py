@@ -232,12 +232,9 @@ class TagManager(models.Manager):
         Passing a value for ``min_count`` implies ``counts=True``.
         """
 
-        extra_joins = ' '.join(queryset.query.get_from_clause()[0][1:])
-        where, params = queryset.query.where.as_sql()
-        if where:
-            extra_criteria = 'AND %s' % where
-        else:
-            extra_criteria = ''
+        extra_joins = ""
+        extra_criteria = ""
+        params = ""
         return self._get_usage(queryset.model, counts, min_count, extra_joins, extra_criteria, params)
 
     def related_for_model(self, tags, model, counts=False, min_count=None):
