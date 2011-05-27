@@ -231,7 +231,6 @@ class TagManager(models.Manager):
         greater than or equal to ``min_count`` will be returned.
         Passing a value for ``min_count`` implies ``counts=True``.
         """
-
         if getattr(queryset.query, 'get_compiler', None):
             # Django 1.2+
             compiler = queryset.query.get_compiler(using='default')
@@ -248,6 +247,7 @@ class TagManager(models.Manager):
             extra_criteria = 'AND %s' % where
         else:
             extra_criteria = ''
+
         return self._get_usage(queryset.model, counts, min_count, extra_joins, extra_criteria, params)
 
     def related_for_model(self, tags, model, counts=False, min_count=None):
