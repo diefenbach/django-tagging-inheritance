@@ -7,7 +7,7 @@ try:
 except NameError:
     from sets import Set as set
 
-from django.contrib.contenttypes import generic
+from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection, models
 from django.db.models.query import QuerySet
@@ -350,7 +350,7 @@ class TaggedItemManager(models.Manager):
           Now that the queryset-refactor branch is in the trunk, this can be
           tidied up significantly.
     """
-    
+
     def get_by_model(self, queryset_or_model, tags):
         """
         Create a ``QuerySet`` containing instances of the specified
@@ -533,6 +533,7 @@ class Tag(models.Model):
     objects = TagManager()
 
     class Meta:
+        app_label = "tagging"
         ordering = ('name',)
         verbose_name = _('tag')
         verbose_name_plural = _('tags')
@@ -547,11 +548,12 @@ class TaggedItem(models.Model):
     tag          = models.ForeignKey(Tag, verbose_name=_('tag'), related_name='items')
     content_type = models.ForeignKey(ContentType, verbose_name=_('content type'))
     object_id    = models.PositiveIntegerField(_('object id'), db_index=True)
-    object       = generic.GenericForeignKey('content_type', 'object_id')
+    object       = GenericForeignKey('content_type', 'object_id')
 
     objects = TaggedItemManager()
 
     class Meta:
+        app_label = "tagging"
         # Enforce unique tag association per object
         unique_together = (('tag', 'content_type', 'object_id'),)
         verbose_name = _('tagged item')
