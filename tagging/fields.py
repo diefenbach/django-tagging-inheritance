@@ -9,7 +9,7 @@ from tagging import settings
 from tagging.models import Tag
 from tagging.utils import edit_string_for_tags
 from tagging.models import parents
-from django.db.models import loading
+
 
 class TagField(CharField):
     """
@@ -24,13 +24,13 @@ class TagField(CharField):
 
     def contribute_to_class(self, cls, name):
         super(TagField, self).contribute_to_class(cls, name)
-        
+
         # Make this object the descriptor for field access.
-        
+
         setattr(cls, self.name, self)
-        
+
         self.cls = cls
-        
+
         signals.post_save.connect(self._save)
 
     def __get__(self, instance, owner=None):
@@ -52,7 +52,7 @@ class TagField(CharField):
            'tag1 tag2 tag3 tag4'
 
         """
-        
+
         # Handle access on the model (i.e. Link.tags)
         if instance is None:
             return edit_string_for_tags(Tag.objects.usage_for_model(owner))
@@ -76,7 +76,7 @@ class TagField(CharField):
             value = value.lower()
         self._set_instance_tag_cache(instance, value)
 
-    def _save(self, **kwargs): #signal, sender, instance):
+    def _save(self, **kwargs):  # signal, sender, instance):
         """
         Save tags back to the database
         """
